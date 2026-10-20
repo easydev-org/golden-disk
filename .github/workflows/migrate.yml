@@ -1,0 +1,107 @@
+name: migrate
+
+# Copy the golden disks from the personal packages into this organisation, once.
+#
+# WHY
+#
+# The disks were published to ghcr.io/silvermelon233/golden-{windows,macos}:base,
+# a PERSONAL account. The sandbox image workflows live in this organisation and
+# authenticate with GITHUB_TOKEN, which can only read packages owned by its own
+# repository or organisation — so pulling them failed with 403 Forbidden.
+#
+# GitHub has no API to transfer a package between owners, so the only way is to
+# pull the layers and push them again under this org.
+#
+# WHY HERE AND NOT LOCALLY
+#
+# The obvious approach — download 14/17 GiB here and push it — kept stalling:
+# the egress proxy cut the connection part-way through a blob (4 GiB into one,
+# 492 MiB into another) and both urllib and curl sat there making no progress.
+# A GitHub runner talks to ghcr directly, with no proxy in between.
+
+on:
+  workflow_dispatch:
+    inputs:
+      which:
+        description: "windows, macos, or both"
+        required: true
+        default: "both"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # The personal package being migrated FROM.
+  SRC_OWNER: silvermelon233
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows, src: golden-windows, dst: golden-disk-windows }
+          - { name: macos,   src: golden-macos,   dst: golden-disk-macos }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: skip when not requested
+        id: gate
+        run: |
+          want="${{ inputs.which }}"
+          if [ "$want" = "both" ] || [ "$want" = "${{ matrix.name }}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "skipping ${{ matrix.name }} (requested: $want)"
+          fi
+
+      # A stock runner has ~30 GB free; a 14-17 GiB disk plus its layers does not
+      # fit alongside the preinstalled toolchains.
+      - name: free disk space
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - name: pull the source disk
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GHCR_TOKEN: ${{ secrets.SRC_GHCR_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ghcr_pull_disk.py ${{ matrix.name }} disk/data.qcow2
+          ls -l disk/data.qcow2
+
+      # Publishing with the same layout this repository already understands: one
+      # tag whose layers are consecutive pieces of the qcow2, with the sha256 in a
+      # manifest annotation. The sandbox workflows concatenate them back and
+      # verify that annotation.
+      - name: push to this organisation
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          DST: ghcr.io/easydev-org/${{ matrix.dst }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ghcr_push_disk.py disk/data.qcow2 "$DST" base
+
+      - name: summary
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          {
+            echo "### ${{ matrix.dst }}:base"
+            echo
+            echo '```'
+            ls -l disk/data.qcow2
+            sha256sum disk/data.qcow2
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
