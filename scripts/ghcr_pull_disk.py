@@ -109,12 +109,19 @@ def main():
                 got_sz = os.path.getsize(bpath)
                 if got_sz != sz:
                     sys.exit(f"blob {dg} is {got_sz} bytes, manifest says {sz}")
-                # Each layer is a tar holding one part file.
-                with tarfile.open(bpath, "r:*") as tf:
-                    parts = [m for m in tf.getmembers() if m.isfile()]
-                    if not parts:
-                        sys.exit(f"layer {i} contains no file")
-                    data = tf.extractfile(parts[0]).read()
+                # Each layer is a tar holding one file. It may be tar+zstd, and
+                # Python's tarfile cannot read zstd — "r:*" raises
+                #   tarfile.ReadError: file could not be opened successfully
+                # So decompress with GNU tar, which handles every compression the
+                # registry can emit, and extract the single member to stdout.
+                ex = subprocess.run(
+                    ["tar", "--to-stdout", "-xf", bpath],
+                    capture_output=True)
+                if ex.returncode != 0:
+                    sys.exit(f"layer {i}: tar failed: {ex.stderr[:200]!r}")
+                data = ex.stdout
+                if not data:
+                    sys.exit(f"layer {i} is empty")
                 fh.write(data)
                 print(f"        -> {len(data) / 1024 ** 2:.1f} MB extracted", flush=True)
             finally:
