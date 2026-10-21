@@ -23,9 +23,9 @@ on:
   workflow_dispatch:
     inputs:
       which:
-        description: "windows, macos, or both"
+        description: "windows, macos, gnome, kde, or all"
         required: true
-        default: "both"
+        default: "all"
 
 permissions:
   contents: read
@@ -44,6 +44,10 @@ jobs:
         include:
           - { name: windows, src: golden-windows, dst: golden-disk-windows }
           - { name: macos,   src: golden-macos,   dst: golden-disk-macos }
+          # The Linux desktop disks: small (1.6-1.8 GiB), one layer each, and one
+          # tag per desktop rather than a single "base".
+          - { name: gnome,   src: golden-linux-desktop, dst: golden-disk-linux-desktop, tag: gnome-v17 }
+          - { name: kde,     src: golden-linux-desktop, dst: golden-disk-linux-desktop, tag: kde-v27 }
     steps:
       - uses: actions/checkout@v4
 
@@ -55,7 +59,9 @@ jobs:
         id: gate
         run: |
           want="${{ inputs.which }}"
-          if [ "$want" = "both" ] || [ "$want" = "${{ matrix.name }}" ]; then
+          # "both" was the old spelling and is kept working; "all" is what the
+          # four-disk matrix needs now.
+          if [ "$want" = "all" ] || [ "$want" = "both" ] || [ "$want" = "${{ matrix.name }}" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -92,13 +98,13 @@ jobs:
           DST: ghcr.io/easydev-org/${{ matrix.dst }}
         run: |
           set -euo pipefail
-          python3 scripts/ghcr_push_disk.py disk/data.qcow2 "$DST" base
+          python3 scripts/ghcr_push_disk.py disk/data.qcow2 "$DST" "${{ matrix.tag || 'base' }}"
 
       - name: summary
         if: steps.gate.outputs.run == 'true'
         run: |
           {
-            echo "### ${{ matrix.dst }}:base"
+            echo "### ${{ matrix.dst }}:${{ matrix.tag || 'base' }}"
             echo
             echo '```'
             ls -l disk/data.qcow2

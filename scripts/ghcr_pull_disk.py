@@ -36,6 +36,11 @@ USER = "SilverMelon233"
 PLAN = {
     "windows": ("golden-windows", "base"),
     "macos": ("golden-macos", "base"),
+    # The Linux desktop disks: same idea (a tag whose layers are pieces of the
+    # qcow2) but one file per layer — disks/vNN.qcow2 — and tags named after the
+    # desktop they carry rather than "base".
+    "gnome": ("golden-linux-desktop", "linux-desktop-gnome-v17"),
+    "kde": ("golden-linux-desktop", "linux-desktop-kde-v27"),
 }
 
 ctx = ssl.create_default_context()
